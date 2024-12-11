@@ -9,7 +9,7 @@ use chroma_types::{
         self, query_executor_server::QueryExecutor, CountPlan, CountResult, GetPlan, GetResult,
         KnnBatchResult, KnnPlan,
     },
-    CollectionSegments, CollectionUuid, Segment,
+    CollectionAndSegments, CollectionUuid, Segment,
 };
 use futures::{stream, StreamExt, TryStreamExt};
 use tokio::signal::unix::{signal, SignalKind};
@@ -131,16 +131,16 @@ impl WorkerServer {
         self.system = Some(system);
     }
 
-    fn fetch_log(&self, collection_segments: &CollectionSegments) -> FetchLogOperator {
+    fn fetch_log(&self, collection_and_segments: &CollectionAndSegments) -> FetchLogOperator {
         FetchLogOperator {
             log_client: self.log.clone(),
             // TODO: Make this configurable
             batch_size: 100,
             // The collection log position is inclusive, and we want to start from the next log
             // Note that we query using the incoming log position this is critical for correctness
-            start_log_offset_id: collection_segments.collection.log_position as u32 + 1,
+            start_log_offset_id: collection_and_segments.collection.log_position as u32 + 1,
             maximum_fetch_count: None,
-            collection_uuid: collection_segments.collection.collection_id,
+            collection_uuid: collection_and_segments.collection.collection_id,
         }
     }
 
@@ -189,8 +189,8 @@ impl WorkerServer {
             .scan
             .ok_or(Status::invalid_argument("Invalid Scan Operator"))?;
 
-        let collection_segments = scan.try_into()?;
-        let fetch_log = self.fetch_log(&collection_segments);
+        let collection_and_segments = scan.try_into()?;
+        let fetch_log = self.fetch_log(&collection_and_segments);
 
         let filter = get_inner
             .filter
@@ -209,7 +209,7 @@ impl WorkerServer {
             self.clone_dispatcher()?,
             // TODO: Make this configurable
             1000,
-            collection_segments,
+            collection_and_segments,
             fetch_log,
             filter.try_into()?,
             limit.into(),
@@ -235,9 +235,9 @@ impl WorkerServer {
             .scan
             .ok_or(Status::invalid_argument("Invalid Scan Operator"))?;
 
-        let collection_segments = scan.try_into()?;
+        let collection_and_segments = scan.try_into()?;
 
-        let fetch_log = self.fetch_log(&collection_segments);
+        let fetch_log = self.fetch_log(&collection_and_segments);
 
         let filter = knn_inner
             .filter
@@ -259,8 +259,8 @@ impl WorkerServer {
 
         // If dimension is not set and segment is uninitialized, we assume
         // this is a query on empty collection, so we return early here
-        if collection_segments.collection.dimension.is_none()
-            && collection_segments.vector_segment.file_path.is_empty()
+        if collection_and_segments.collection.dimension.is_none()
+            && collection_and_segments.vector_segment.file_path.is_empty()
         {
             return Ok(Response::new(to_proto_knn_batch_result(
                 once(Default::default())
@@ -276,7 +276,7 @@ impl WorkerServer {
             self.hnsw_index_provider.clone(),
             // TODO: Make this configurable
             1000,
-            collection_segments,
+            collection_and_segments,
             fetch_log,
             filter.try_into()?,
         );
